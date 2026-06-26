@@ -6,20 +6,113 @@ This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs
 
 ```
 .
-├── 000046600927_0x0133…fd44.block.lz4   # a real block, exactly as stored in the lake
-├── stream.py                            # stream a block from the lake, with throughput + decode
-└── requirements.txt
+├── stream.py           # stream a block from the lake; throughput, decode, tx JSON
+├── requirements.txt
+├── Dockerfile          # builds the self-seeding demo lake image
+├── entrypoint.sh       # boots SeaweedFS and loads the sample block
+└── stream.log          # full sample output from the command below
 ```
 
 ### The sample block
 
-The `.block.lz4` file is a real **Base** block (Chain ID 8453), block number **46,600,927**, kept here as a reference so you can see the exact format the lake serves:
+The demo image ships a real **Base** block (Chain ID 8453), block number **46,600,927**, so you can see the exact format the lake serves:
 
 - A single block stored as a **Protobuf** message, **LZ4-compressed**.
-- About **3.4 MB** compressed and **12.1 MB** decoded.
+- About **3.2 MB** compressed and **11.6 MB** decoded.
 - Contains the block header, **169 transactions**, **1,180 logs**, plus full receipts and traces.
 
 The block schema is published at [bitquery/streaming_protobuf](https://github.com/bitquery/streaming_protobuf), and the Python bindings come from `bitquery-pb2-kafka-package`. It is the same schema Bitquery uses for its Kafka streams, so one decoder works for both.
+
+### Sample output
+
+After pointing the script at the demo lake (see [Stream a block](#stream-a-block)), this command streams the block, prints throughput, decodes it, and dumps the first three transactions as JSON straight from the pb2 schema:
+
+```bash
+python3 stream.py --bucket archive --key "$KEY" --tx 3
+```
+
+```
+  streamed     3.24 MB  in   0.0s  ->    203.3 MB/s (1.63 Gbps)
+  reads: 1, object size: 3.24 MB
+
+  decoded 11.55 MB (evm):
+  number     : 46,600,927
+  hash       : 0x0133403c4fe53c434b1d2a1686d339eebd4e8e7f50ab52ab84cd68029e82e955
+  timestamp  : 1779991201
+  gas used   : 50,521,537
+  transactions: 169
+  logs        : 1,180
+
+  first 3 transaction(s) as JSON:
+
+--- transaction #0 ---
+{
+  "TransactionHeader": {
+    "Hash": "w9VR+y41FcMsk8LvKHYlRRHgdCfg3kkd/lWd1K8HvS4=",
+    "Gas": "1000000",
+    "Data": "Pba+KwAACN0AEBwSAAAAAAAAAAQAAAAAahiCYwAAAAABgHPlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA5HOxsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPzQHYlB/RvebPz97nUBKWDMsXMW3xtFk5B0Vv8WHJWmDXIiAAAAAAAAAAAAAAAAUFD2mpeG8IFQkjTxp/RoS15bdskAAAAAAAAAAAAAAAAAlA==",
+    "Protected": true,
+    "Type": 126,
+    "To": "QgAAAAAAAAAAAAAAAAAAAAAAABU=",
+    "From": "3q3erd6t3q3erd6t3q3erd6tAAE=",
+    "ToCode": {
+      "Hash": "H5WGVKsGoVKZPnoK57bbsNSxkmXMkze4eJ/hNTvZ3DU=",
+      "Size": 2055
+    },
+    "IsSystemTx": false,
+    "SourceHash": "QdzORbzbW87xDkjNIAiUs6c+ERcQyK3Mpqs4tbhw2GM=",
+    "Time": "1779991201000000000"
+  },
+  "Signature": {},
+  "Receipt": {
+    "ReceiptHeader": {
+      "GasUsed": "46218",
+      "Type": 126,
+      "CumulativeGasUsed": "46218",
+      "Status": "1"
+    }
+  },
+  "Trace": { "... full call trace and opcode capture states ..." }
+}
+
+--- transaction #1 ---
+{
+  "TransactionHeader": {
+    "Index": "1",
+    "Hash": "y+Zdue1Xv1ewK5fb3WZylm1rMqkHzdtRHUcxmjX1asM=",
+    "Gas": "100000",
+    "Type": 2,
+    "To": "QIdhDPfPAYPmJs87yEFSpCc3S6M=",
+    "From": "guFZ1j5YUGfp+jpLun2ZL7xmd1E="
+  },
+  "Receipt": {
+    "ReceiptHeader": {
+      "GasUsed": "46371",
+      "CumulativeGasUsed": "92589",
+      "Status": "1"
+    },
+    "Logs": [
+      {
+        "LogHeader": {
+          "Address": "QIdhDPfPAYPmJs87yEFSpCc3S6M=",
+          "Data": "//////////////////////////////////////////8="
+        },
+        "Topics": [
+          { "Hash": "jFvh5evsfVvRT3FCfR6E890DFMD3sikeWyAKyMfDuSU=" },
+          { "Index": "1", "Hash": "AAAAAAAAAAAAAAAAguFZ1j5YUGfp+jpLun2ZL7xmd1E=" },
+          { "Index": "2", "Hash": "AAAAAAAAAAAAAAAA2LqdGpn8IfDsok6bhXN8KKGUpOI=" }
+        ]
+      }
+    ]
+  },
+  "Trace": { "... full execution trace ..." }
+}
+
+--- transaction #2 ---
+{ "... same pb2 fields: header, signature, receipt, logs, trace ..." }
+```
+
+Each transaction JSON includes the full pb2 structure: header, signature, receipt (with logs), and trace. The excerpt above trims bloom filters, long `Data` fields, and trace internals for readability. See `stream.log` for the complete run (~23k lines).
 
 ## How blocks are stored
 
@@ -53,32 +146,28 @@ export DATA_LAKE_ACCESS_KEY=admin
 export DATA_LAKE_SECRET_KEY=secret
 ```
 
-Stream and decode the block:
+Stream, decode, and print the first three transactions:
 
 ```bash
-python stream.py --bucket archive --key "$KEY" --decode
+python3 stream.py --bucket archive --key "$KEY" --tx 3
 ```
 
-```
-  decoded 12.12 MB (evm):
-  number     : 46,600,927
-  hash       : 0x0133403c4fe53c434b1d2a1686d339eebd4e8e7f50ab52ab84cd68029e82e955
-  timestamp  : 1779991201
-  gas used   : 50,521,537
-  transactions: 169
-  logs        : 1,180
+For a block summary only (no transaction JSON):
+
+```bash
+python3 stream.py --bucket archive --key "$KEY" --decode
 ```
 
 Keep streaming for a fixed window to see a steady rate:
 
 ```bash
-python stream.py --bucket archive --key "$KEY" --duration 15
+python3 stream.py --bucket archive --key "$KEY" --duration 15
 ```
 
 Run several readers in parallel to see aggregate throughput scale:
 
 ```bash
-python stream.py --bucket archive --key "$KEY" --duration 15 --concurrency 16
+python3 stream.py --bucket archive --key "$KEY" --duration 15 --concurrency 16
 ```
 
 ## Options
@@ -91,14 +180,14 @@ python stream.py --bucket archive --key "$KEY" --duration 15 --concurrency 16
 | `--region` | `DATA_LAKE_REGION` env, else `us-east-1` | S3 region |
 | `--chain` | `evm` | Schema to decode with: `evm`, `solana`, `tron`, `utxo` |
 | `--decode` | off | Decode the block after streaming and print a summary |
-| `--tx N` | `0` | After decoding, print the first N transactions as JSON (full pb2 fields) |
-| `--json` | off | After decoding, print the full block as JSON (large) |
+| `--tx N` | `0` | After streaming, decode and print the first N transactions as JSON (full pb2 fields). Implies decode. |
+| `--json` | off | After streaming, decode and print the full block as JSON (large). Implies decode. |
 | `--duration` | `0` | Keep streaming for N seconds |
 | `--concurrency` | `1` | Number of parallel readers; greater than 1 runs fan-out mode |
 
 ## Decode the local sample without streaming
 
-If you only want to see the format, you can decode the bundled file directly:
+The demo image bakes the block into `/seed/`. You can also decode a downloaded `.block.lz4` directly:
 
 ```python
 import lz4.frame
