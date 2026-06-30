@@ -6,7 +6,8 @@ This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs
 
 ```
 .
-├── stream.py           # stream a block from the lake; throughput, decode, tx JSON
+├── stream.py           # stream a block from the lake; throughput, decode, tx JSON, transfers
+├── transfers.py        # transfers_from_block(): native, ERC-20, ERC-721 extraction
 ├── requirements.txt
 ├── Dockerfile          # builds the self-seeding demo lake image
 ├── entrypoint.sh       # boots SeaweedFS and loads the sample block
@@ -170,6 +171,21 @@ Run several readers in parallel to see aggregate throughput scale:
 python3 stream.py --bucket archive --key "$KEY" --duration 15 --concurrency 16
 ```
 
+Extract transfers from the block (native, ERC-20, ERC-721):
+
+```bash
+python3 stream.py --bucket archive --key "$KEY" --transfers
+python3 stream.py --bucket archive --key "$KEY" --transfers 5 --token 0x4200000000000000000000000000000000000006
+```
+
+```
+  469 transfers  {'erc20': 422, 'native': 28, 'erc721': 19}
+
+  [erc20] 0x4200000000000000000000000000000000000006  0x498581ff... -> 0xbf4195ab...  amount 3390958905493657
+```
+
+The parser is `transfers_from_block()` in `transfers.py`. See [Extract transfers from a block](https://docs.bitquery.io/docs/data-lake/extract-transfers/) for the full walkthrough.
+
 ## Options
 
 | Flag | Default | Purpose |
@@ -182,6 +198,8 @@ python3 stream.py --bucket archive --key "$KEY" --duration 15 --concurrency 16
 | `--decode` | off | Decode the block after streaming and print a summary |
 | `--tx N` | `0` | After streaming, decode and print the first N transactions as JSON (full pb2 fields). Implies decode. |
 | `--json` | off | After streaming, decode and print the full block as JSON (large). Implies decode. |
+| `--transfers N` | `0` | After streaming, extract transfers (native, ERC-20, ERC-721) and print the first N (`-1` for all). EVM only. Implies decode. |
+| `--token 0x...` | none | With `--transfers`, only show this token contract |
 | `--duration` | `0` | Keep streaming for N seconds |
 | `--concurrency` | `1` | Number of parallel readers; greater than 1 runs fan-out mode |
 

@@ -13,9 +13,10 @@ an endpoint, a bucket, an object key, and your data lake credentials.
 Usage:
     pip install -r requirements.txt
 
-    export DATA_LAKE_ENDPOINT=https://<your-lake-endpoint>
-    export DATA_LAKE_ACCESS_KEY=<key>
-    export DATA_LAKE_SECRET_KEY=<secret>
+    # run the demo lake first:  docker run -p 8333:8333 marketingbitquery/datalake-demo
+    export DATA_LAKE_ENDPOINT=http://localhost:8333
+    export DATA_LAKE_ACCESS_KEY=admin
+    export DATA_LAKE_SECRET_KEY=secret
 
     # stream once and print throughput
     python stream.py --bucket archive --key base/blocks/000046600927_....block.lz4
@@ -39,6 +40,8 @@ import time
 import boto3
 import lz4.frame
 from google.protobuf.json_format import MessageToJson
+
+from transfers import transfers_from_block
 
 CHUNK = 64 * 1024  # 64 KB read chunks
 
@@ -122,7 +125,7 @@ def run_single(args):
 
     print(f"\n  reads: {reads}, object size: {len(raw) / (1024*1024):.2f} MB")
 
-    if (args.decode or args.tx or args.json) and raw is not None:
+    if (args.decode or args.tx or args.json or args.transfers) and raw is not None:
         block, decoded_size = decode_block(raw, args.chain)
         print(f"\n  decoded {decoded_size / (1024*1024):.2f} MB ({args.chain}):")
         if args.chain == "evm":
@@ -140,6 +143,30 @@ def run_single(args):
         if args.json:
             print("\n  full block as JSON:\n")
             print(MessageToJson(block))
+        if args.transfers:
+            print_transfers(block, token=args.token, limit=args.transfers)
+
+
+def print_transfers(block, token=None, limit=10):
+    """Extract transfers from a decoded block and print a breakdown."""
+    transfers = transfers_from_block(block)
+    if token:
+        token = token.lower()
+        transfers = [t for t in transfers if (t["token"] or "").lower() == token]
+
+    counts = {}
+    for t in transfers:
+        counts[t["type"]] = counts.get(t["type"], 0) + 1
+    print(f"\n  {len(transfers)} transfers  {counts}\n")
+
+    shown = transfers if limit < 0 else transfers[:limit]
+    for t in shown:
+        if t["type"] == "erc721":
+            print(f"  [{t['type']}] {t['token']}  {t['from']} -> {t['to']}  id {t['token_id']}")
+        elif t["type"] == "native":
+            print(f"  [{t['type']}] {t['from']} -> {t['to']}  amount {t['amount']}")
+        else:
+            print(f"  [{t['type']}] {t['token']}  {t['from']} -> {t['to']}  amount {t['amount']}")
 
 
 def run_fanout(args):
@@ -188,6 +215,10 @@ def main():
                    help="After decoding, print the first N transactions as JSON.")
     p.add_argument("--json", action="store_true",
                    help="After decoding, print the full block as JSON (large).")
+    p.add_argument("--transfers", type=int, default=0, nargs="?", const=10, metavar="N",
+                   help="After decoding, extract transfers and print the first N "
+                        "(default 10; -1 for all). EVM only. Implies decode.")
+    p.add_argument("--token", help="With --transfers, only show this token contract.")
     p.add_argument("--duration", type=int, default=0,
                    help="Keep streaming for N seconds (single mode) or run window (fan-out).")
     p.add_argument("--concurrency", type=int, default=1,
