@@ -11,7 +11,8 @@ This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs
 ├── requirements.txt
 ├── Dockerfile          # builds the self-seeding demo lake image
 ├── entrypoint.sh       # boots SeaweedFS and loads the sample block
-└── stream.log          # full sample output from the command below
+├── stream.log          # full sample output of stream + decode + tx JSON
+└── transfers.log       # sample output of the --transfers run
 ```
 
 ### The sample block
