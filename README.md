@@ -10,18 +10,31 @@ This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs
 ├── transfers.py        # transfers_from_block(): native, ERC-20, ERC-721 extraction
 ├── requirements.txt
 ├── Dockerfile          # builds the self-seeding demo lake image
-├── entrypoint.sh       # boots SeaweedFS and loads the sample block
-├── stream.log          # full sample output of stream + decode + tx JSON
-└── transfers.log       # sample output of the --transfers run
+├── entrypoint.sh       # boots SeaweedFS and loads the sample blocks
+├── sample/             # sample block files baked into the demo image (Base + Tron)
+└── logs/
+    ├── base-block-stream.log     # Base block: stream + decode + first 3 tx as JSON
+    ├── base-block-transfers.log  # Base block: --transfers run
+    └── tron-block-stream.log     # Tron block: stream + decode + first 3 tx as JSON
 ```
 
-### The sample block
+### The sample blocks
 
-The demo image ships a real **Base** block (Chain ID 8453), block number **46,600,927**, so you can see the exact format the lake serves:
+The demo image ships two real blocks from two different chains, so you can see the exact format the lake serves and how the same pipeline handles different schemas. Each block is stored under a per-chain prefix — `base/blocks/` and `tron/blocks/`.
+
+**Base** (EVM, Chain ID 8453), block number **46,600,927**:
 
 - A single block stored as a **Protobuf** message, **LZ4-compressed**.
 - About **3.2 MB** compressed and **11.6 MB** decoded.
 - Contains the block header, **169 transactions**, **1,180 logs**, plus full receipts and traces.
+- Decode with `--chain evm` (the default).
+
+**Tron** (mainnet), block number **71,523,078** (2025-04-21T08:28:48Z):
+
+- Same **Protobuf** + **LZ4** format, decoded with the Tron schema.
+- About **265 KB** compressed and **2.2 MB** decoded.
+- Contains the block header, **394 transactions**, plus per-transaction results, receipts, and contracts.
+- Decode with `--chain tron`.
 
 The block schema is published at [bitquery/streaming_protobuf](https://github.com/bitquery/streaming_protobuf), and the Python bindings come from `bitquery-pb2-kafka-package`. It is the same schema Bitquery uses for its Kafka streams, so one decoder works for both.
 
@@ -114,7 +127,7 @@ python3 stream.py --bucket archive --key "$KEY" --tx 3
 { "... same pb2 fields: header, signature, receipt, logs, trace ..." }
 ```
 
-Each transaction JSON includes the full pb2 structure: header, signature, receipt (with logs), and trace. The excerpt above trims bloom filters, long `Data` fields, and trace internals for readability. See `stream.log` for the complete run (~23k lines).
+Each transaction JSON includes the full pb2 structure: header, signature, receipt (with logs), and trace. The excerpt above trims bloom filters, long `Data` fields, and trace internals for readability. See `logs/base-block-stream.log` for the complete run (~23k lines), and `logs/tron-block-stream.log` for the equivalent Tron run.
 
 ## How blocks are stored
 
@@ -131,7 +144,11 @@ Bitquery hosts the lake and writes the blocks. You read them over an S3 interfac
 ```bash
 pip install -r requirements.txt
 
+# Base (EVM) block
 KEY="base/blocks/000046600927_0x0133403c4fe53c434b1d2a1686d339eebd4e8e7f50ab52ab84cd68029e82e955_49e9339dd61bdb91320044378bff935efd925d868ca257ef8c3bc42177f9fd44.block.lz4"
+
+# Tron block (decode with --chain tron)
+TRON_KEY="tron/blocks/000071523078_0000000004435b06e7e8e836cc1738983b576d4b5ee7a98d1d7877d58c4e1aef_0c72a82a56df49720c455ba0d8e78c8c8a835f9b89bb42e263680397660551a1.block.lz4"
 ```
 
 Run the demo lake. We publish a ready-to-run image that starts a SeaweedFS lake with the sample block already loaded. You do not upload anything.
@@ -158,6 +175,12 @@ For a block summary only (no transaction JSON):
 
 ```bash
 python3 stream.py --bucket archive --key "$KEY" --decode
+```
+
+Stream and decode the Tron block from the same lake — same command, just the Tron key and `--chain tron`:
+
+```bash
+python3 stream.py --bucket archive --key "$TRON_KEY" --chain tron --tx 3
 ```
 
 Keep streaming for a fixed window to see a steady rate:
@@ -212,7 +235,7 @@ The demo image bakes the block into `/seed/`. You can also decode a downloaded `
 import lz4.frame
 from evm.block_message_pb2 import BlockMessage
 
-raw = open("000046600927_0x0133403c4fe53c434b1d2a1686d339eebd4e8e7f50ab52ab84cd68029e82e955_49e9339dd61bdb91320044378bff935efd925d868ca257ef8c3bc42177f9fd44.block.lz4", "rb").read()
+raw = open("sample/000046600927_0x0133403c4fe53c434b1d2a1686d339eebd4e8e7f50ab52ab84cd68029e82e955_49e9339dd61bdb91320044378bff935efd925d868ca257ef8c3bc42177f9fd44.block.lz4", "rb").read()
 block = BlockMessage()
 block.ParseFromString(lz4.frame.decompress(raw))
 print(int.from_bytes(block.Header.Number, "big"), len(block.Transactions))

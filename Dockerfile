@@ -10,7 +10,7 @@ FROM chrislusf/seaweedfs:latest
 RUN apk add --no-cache aws-cli curl
 
 # bake the sample block into the image
-COPY *.block.lz4 /seed/
+COPY sample/*.block.lz4 /seed/
 
 # boot script that starts SeaweedFS and loads the block
 COPY entrypoint.sh /entrypoint.sh
