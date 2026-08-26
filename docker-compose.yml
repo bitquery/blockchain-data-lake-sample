@@ -1,0 +1,62 @@
+## Full Iceberg lakehouse demo.
+##
+## Brings up three things and wires them together:
+##
+##   lake      SeaweedFS S3 endpoint, self-seeded with the sample blocks and
+##             Parquet dumps (the marketingbitquery/datalake-demo image).
+##   catalog   An Iceberg REST catalog. This is what engines connect to --
+##             Trino, Spark, Flink, DuckDB. It writes Iceberg metadata into
+##             the lake under s3://archive/iceberg/.
+##   registrar A one-shot job that registers the bundled Parquet dumps as
+##             Iceberg tables in the catalog, then exits. It runs PyIceberg
+##             so that YOU never have to -- your engine only talks to the
+##             catalog.
+##
+## Usage:
+##   docker compose up -d
+##   docker compose logs -f registrar     # wait for "done"
+##
+## Then point any Iceberg engine at:
+##   REST catalog : http://localhost:8181
+##   S3 storage   : http://localhost:8333   (key admin / secret secret, path-style)
+##
+## Tables: iceberg.ethereum.dex_trades, iceberg.ethereum.transfers
+##
+## For raw block streaming (stream.py) you do NOT need this stack -- just run
+## the lake image on its own. This compose is only for the Iceberg story.
+
+services:
+  lake:
+    image: marketingbitquery/datalake-demo:latest
+    ports:
+      - "8333:8333"
+
+  catalog:
+    image: tabulario/iceberg-rest:latest
+    depends_on:
+      - lake
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://archive/iceberg
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://lake:8333
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: secret
+      AWS_REGION: us-east-1
+
+  registrar:
+    image: python:3.12-slim
+    depends_on:
+      - catalog
+    environment:
+      CATALOG_URI: http://catalog:8181
+      S3_ENDPOINT: http://lake:8333
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: secret
+      AWS_REGION: us-east-1
+    volumes:
+      - ./registrar:/work
+    command: ["sh", "-c", "pip install --quiet 'pyiceberg[pyarrow]' boto3 && python /work/register.py"]
+    restart: "no"
