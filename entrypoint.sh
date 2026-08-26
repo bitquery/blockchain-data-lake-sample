@@ -1,12 +1,17 @@
 #!/bin/sh
 #
-# Boot SeaweedFS with the S3 endpoint, then load every bundled sample block so
-# the lake is ready to stream the moment the container starts. No external
-# upload.
+# Boot SeaweedFS with the S3 endpoint, then load every bundled sample object so
+# the lake is ready the moment the container starts. No external upload.
 #
-# Each block is stored under a per-chain prefix, matching the lake layout:
-#   s3://archive/base/blocks/<block>.block.lz4   (EVM/Base, hash starts 0x)
-#   s3://archive/tron/blocks/<block>.block.lz4   (Tron, hash starts 00...)
+# Two kinds of object are seeded, both under the same per-chain prefix layout
+# the production lake uses:
+#
+#   s3://archive/base/blocks/<block>.block.lz4              raw block, stream it
+#   s3://archive/tron/blocks/<block>.block.lz4              raw block, stream it
+#   s3://archive/ethereum/dex_trades/<range>.parquet        dump table, query it
+#
+# Blocks are Protobuf + LZ4 and are read with stream.py. Parquet dumps are the
+# flattened tables and are registered into Iceberg by iceberg_query.py.
 
 DATADIR=/data
 BUCKET=archive
@@ -44,7 +49,7 @@ until curl -s -o /dev/null http://localhost:8333; do
   sleep 1
 done
 
-# create the bucket and upload every baked-in block (idempotent; safe on restart)
+# create the bucket and upload every baked-in object (idempotent; safe on restart)
 aws $EP s3 mb "s3://$BUCKET" 2>/dev/null
 LOADED=0
 for BLOCK in /seed/*.block.lz4; do
@@ -58,11 +63,26 @@ for BLOCK in /seed/*.block.lz4; do
   fi
 done
 
-if [ "$LOADED" -eq 0 ]; then
-  echo "[seed] no blocks loaded; the lake is up but empty" >&2
+# Parquet dumps keep the directory layout they were baked in with, so
+# /seed-parquet/ethereum/dex_trades/x.parquet lands at ethereum/dex_trades/x.parquet
+PARQUET=0
+if [ -d /seed-parquet ]; then
+  if aws $EP s3 cp --recursive /seed-parquet "s3://$BUCKET/"; then
+    PARQUET=$(find /seed-parquet -name '*.parquet' | wc -l | tr -d ' ')
+    echo "[seed] loaded $PARQUET Parquet file(s) under s3://$BUCKET/"
+  else
+    echo "[seed] failed to load Parquet dumps" >&2
+  fi
+fi
+
+if [ "$LOADED" -eq 0 ] && [ "$PARQUET" -eq 0 ]; then
+  echo "[seed] nothing loaded; the lake is up but empty" >&2
 else
-  echo "[seed] ready. $LOADED block(s) loaded. stream one with:"
+  echo "[seed] ready. $LOADED block(s) and $PARQUET Parquet file(s) loaded."
+  echo "[seed] stream a block with:"
   echo "  python stream.py --bucket $BUCKET --key <chain>/blocks/<block>.block.lz4 --decode --chain <chain>"
+  echo "[seed] query the Parquet dumps as an Iceberg table with:"
+  echo "  python iceberg_query.py --register --examples"
 fi
 
 # keep SeaweedFS in the foreground so the container stays alive

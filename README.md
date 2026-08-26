@@ -1,6 +1,15 @@
 # Bitquery Blockchain Data Lake: Sample and Streaming Example
 
-This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs.bitquery.io/docs/cloud/) looks like and how to stream one from the lake over a standard S3 interface.
+This repo shows what the [Bitquery Blockchain Data Lake](https://docs.bitquery.io/docs/cloud/) serves and how to read it over a standard S3 interface.
+
+The lake holds two kinds of object, for two different jobs:
+
+| Object | Format | Read with | Good for |
+| --- | --- | --- | --- |
+| `<block>.block.lz4` | Protobuf + LZ4, one file per block | `stream.py` | Full fidelity: receipts, logs, traces. Replay, indexing, streaming. |
+| `<range>.parquet` | Parquet, flattened dump tables | `iceberg_query.py` | SQL analytics. Registered into Iceberg, read by Spark / Trino / DuckDB / Athena. |
+
+Raw blocks are not queryable by an Iceberg engine — Iceberg reads columnar files (Parquet/ORC/Avro) plus table metadata, and a protobuf blob is neither. The Parquet dumps are the analytics surface, and `iceberg_query.py` turns them into a real Iceberg table without moving any data.
 
 ## What's here
 
@@ -8,10 +17,13 @@ This repo shows what a block in the [Bitquery Blockchain Data Lake](https://docs
 .
 ├── stream.py           # stream a block from the lake; throughput, decode, tx JSON, transfers
 ├── transfers.py        # transfers_from_block(): native, ERC-20, ERC-721 extraction
+├── iceberg_query.py    # register the lake's Parquet dumps as an Iceberg table and run SQL
 ├── requirements.txt
 ├── Dockerfile          # builds the self-seeding demo lake image
-├── entrypoint.sh       # boots SeaweedFS and loads the sample blocks
-├── sample/             # sample block files baked into the demo image (Base + Tron)
+├── entrypoint.sh       # boots SeaweedFS and loads the sample blocks and Parquet dumps
+├── sample/             # sample files baked into the demo image
+│   ├── *.block.lz4     #   Base + Tron blocks
+│   └── parquet/        #   ethereum/dex_trades/ dump
 └── logs/
     ├── base-block-stream.log     # Base block: stream + decode + first 3 tx as JSON
     ├── base-block-transfers.log  # Base block: --transfers run
@@ -35,6 +47,13 @@ The demo image ships two real blocks from two different chains, so you can see t
 - About **265 KB** compressed and **2.2 MB** decoded.
 - Contains the block header, **394 transactions**, plus per-transaction results, receipts, and contracts.
 - Decode with `--chain tron`.
+
+**Ethereum dex_trades** (Parquet dump), blocks **24,053,500 - 24,053,549**:
+
+- One **Parquet** file covering a 50-block range: `ethereum/dex_trades/24053500_24053549.parquet`.
+- About **376 KB**, **1,773 trades**, **53 columns** — the flattened DEX trade table, not raw blocks.
+- Columns are the dump schema: `Block_Number`, `Trade_Buy_*`, `Trade_Sell_*`, `Trade_Dex_*`, `Transaction_*`.
+- Same schema as the cloud dumps in [blockchain-cloud-data-dump-sample](https://github.com/bitquery/blockchain-cloud-data-dump-sample), served from `s3://bitquery-blockchain-dataset/ethereum/dex_trades/`.
 
 The block schema is published at [bitquery/streaming_protobuf](https://github.com/bitquery/streaming_protobuf), and the Python bindings come from `bitquery-pb2-kafka-package`. It is the same schema Bitquery uses for its Kafka streams, so one decoder works for both.
 
@@ -129,15 +148,20 @@ python3 stream.py --bucket archive --key "$KEY" --tx 3
 
 Each transaction JSON includes the full pb2 structure: header, signature, receipt (with logs), and trace. The excerpt above trims bloom filters, long `Data` fields, and trace internals for readability. See `logs/base-block-stream.log` for the complete run (~23k lines), and `logs/tron-block-stream.log` for the equivalent Tron run.
 
-## How blocks are stored
+## How the lake is laid out
 
-The data lake holds the complete archive of each chain, from genesis to the current tip, as one `.block.lz4` file per block. Files are named by block number and hash:
+The data lake holds the complete archive of each chain, from genesis to the current tip, as one `.block.lz4` file per block. Parquet dumps live beside them under a per-table prefix, each file covering a block range:
 
 ```
-<block_number>_<block_hash>_<...>.block.lz4
+archive/
+├── base/blocks/<block_number>_<block_hash>_<...>.block.lz4
+├── tron/blocks/<block_number>_<block_hash>_<...>.block.lz4
+└── ethereum/
+    ├── dex_trades/<first_block>_<last_block>.parquet
+    └── transfers/<first_block>_<last_block>.parquet
 ```
 
-Bitquery hosts the lake and writes the blocks. You read them over an S3 interface, which means any standard S3 client works (`aws s3`, boto3, s3fs).
+Bitquery hosts the lake and writes both. You read them over an S3 interface, which means any standard S3 client works (`aws s3`, boto3, s3fs) — and, for the Parquet side, any Iceberg engine once the files are registered.
 
 ## Stream a block
 
@@ -210,6 +234,134 @@ python3 stream.py --bucket archive --key "$KEY" --transfers 5 --token 0x42000000
 
 The parser is `transfers_from_block()` in `transfers.py`. See [Extract transfers from a block](https://docs.bitquery.io/docs/data-lake/extract-transfers/) for the full walkthrough.
 
+## Query the Parquet dumps with an Iceberg engine
+
+Parquet files sitting in a bucket are files, not a table. An engine pointed at them has to list objects, guess the layout, and read every file for every query. Iceberg fixes that by adding a metadata layer: schema, snapshots, manifests, and per-file column statistics.
+
+`iceberg_query.py` builds that layer over the Parquet already in the lake. It uses PyIceberg's `add_files`, which **registers the existing S3 objects as Iceberg data files** — no rewrite, no copy, no second storage bill. The only new bytes are the small metadata tree under `s3://archive/iceberg/`.
+
+```bash
+pip install -r requirements.txt
+
+export DATA_LAKE_ENDPOINT=http://localhost:8333
+export DATA_LAKE_ACCESS_KEY=admin
+export DATA_LAKE_SECRET_KEY=secret
+
+# create the table, register the Parquet, print the schema, run example queries
+python3 iceberg_query.py
+```
+
+```
+  registered 1 Parquet file(s) as Iceberg table ethereum.dex_trades
+    s3://archive/ethereum/dex_trades/24053500_24053549.parquet
+  table metadata : s3://archive/iceberg/
+  catalog        : sqlite:///iceberg_catalog.db
+
+  scanned 1,773 rows into DuckDB
+
+  Trades per DEX protocol
+  -----------------------
+  ┌─────────────────┬────────┬────────────┐
+  │    protocol     │ trades │ volume_usd │
+  ├─────────────────┼────────┼────────────┤
+  │ uniswap_v3      │    690 │  588603.52 │
+  │ uniswap_v4      │    285 │  270065.25 │
+  │ uniswap_v2      │    625 │  113098.91 │
+  │ curve_v1        │      5 │   41400.67 │
+  │ pancake_swap_v3 │     47 │   22601.65 │
+  └─────────────────┴────────┴────────────┘
+```
+
+Register only, then query separately:
+
+```bash
+python3 iceberg_query.py --register
+python3 iceberg_query.py --examples
+```
+
+Run your own SQL. The Iceberg scan is handed to DuckDB as `dex_trades`:
+
+```bash
+python3 iceberg_query.py --sql "
+  SELECT Trade_Dex_ProtocolName AS protocol,
+         count(*) AS trades,
+         round(sum(Trade_Buy_AmountInUSD), 2) AS volume_usd
+  FROM dex_trades
+  GROUP BY 1
+  ORDER BY volume_usd DESC"
+```
+
+Push a filter into the Iceberg scan so non-matching files are never fetched from S3:
+
+```bash
+python3 iceberg_query.py --where "Trade_Buy_Currency_Symbol == 'WETH'" --examples
+```
+
+See what Iceberg added on top of the raw Parquet — snapshots, data files, record counts:
+
+```bash
+python3 iceberg_query.py --metadata
+```
+
+Register more than one file into the same table by repeating `--key`:
+
+```bash
+python3 iceberg_query.py --register --replace \
+  --key ethereum/dex_trades/24053500_24053549.parquet \
+  --key ethereum/dex_trades/24053550_24053599.parquet
+```
+
+### A note on USD amounts
+
+The dump records the price the DEX quoted, and an illiquid or spoofed pair can quote nonsense. This 50-block sample contains two XOR trades priced at ~4e23 USD. The USD examples apply a `Trade_Buy_AmountInUSD < 1e9` bound, and the "Outlier USD amounts" example prints exactly what that bound excludes rather than hiding it. Any real analytics on this data needs a similar sanity check — an unbounded `sum(Trade_Buy_AmountInUSD)` will be wrong.
+
+### The catalog
+
+By default the catalog is a local SQLite file (`iceberg_catalog.db`), so the demo needs nothing beyond pip. That catalog is private to your machine — fine for a sample, wrong for a team.
+
+For a shared setup, point `--catalog-uri` (or `ICEBERG_CATALOG_URI`) at a REST catalog and every engine sees the same tables:
+
+```bash
+python3 iceberg_query.py --catalog-uri http://localhost:8181 --register
+```
+
+Anything speaking the Iceberg REST protocol works: Nessie, Polaris, Lakekeeper, AWS Glue, Unity Catalog. Recent SeaweedFS builds also serve an Iceberg REST catalog on port 8181 alongside the S3 endpoint.
+
+### Reading the same table from other engines
+
+Once registered, the table is ordinary Iceberg. Nothing about it is Bitquery-specific:
+
+```sql
+-- Trino / Athena
+SELECT Trade_Dex_ProtocolName, count(*)
+FROM iceberg.ethereum.dex_trades
+GROUP BY 1;
+```
+
+```python
+# Spark
+spark.table("ethereum.dex_trades").groupBy("Trade_Dex_ProtocolName").count().show()
+```
+
+### Iceberg options
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--endpoint` | `DATA_LAKE_ENDPOINT` env | S3 endpoint of the data lake |
+| `--bucket` | `archive` | Bucket name |
+| `--key` | `ethereum/dex_trades/24053500_24053549.parquet` | Parquet object key to register; repeatable |
+| `--table` | `ethereum.dex_trades` | Iceberg table identifier |
+| `--catalog-uri` | `ICEBERG_CATALOG_URI` env, else `sqlite:///iceberg_catalog.db` | Catalog URI; an `http(s)` URL uses a REST catalog |
+| `--register` | off | Create the table and register the Parquet files |
+| `--replace` | off | With `--register`, drop and recreate an existing table |
+| `--schema` | off | Print the table schema |
+| `--metadata` | off | Print snapshots and per-file statistics |
+| `--examples` | off | Run the built-in example queries |
+| `--sql` | none | Run one SQL statement against the table |
+| `--where` | none | Iceberg row filter pushed into the scan |
+
+With no flags at all, the script does `--register --schema --examples`.
+
 ## Options
 
 | Flag | Default | Purpose |
@@ -226,6 +378,8 @@ The parser is `transfers_from_block()` in `transfers.py`. See [Extract transfers
 | `--token 0x...` | none | With `--transfers`, only show this token contract |
 | `--duration` | `0` | Keep streaming for N seconds |
 | `--concurrency` | `1` | Number of parallel readers; greater than 1 runs fan-out mode |
+
+These are `stream.py` flags. `iceberg_query.py` has its own set, listed above.
 
 ## Decode the local sample without streaming
 
@@ -247,3 +401,5 @@ print(int.from_bytes(block.Header.Number, "big"), len(block.Transactions))
 - [Demo image on Docker Hub](https://hub.docker.com/r/marketingbitquery/datalake-demo)
 - [Block schema](https://github.com/bitquery/streaming_protobuf)
 - [SeaweedFS](https://github.com/seaweedfs/seaweedfs)
+- [Cloud dump schemas](https://github.com/bitquery/blockchain-cloud-data-dump-sample) — the Parquet table layouts per chain
+- [Apache Iceberg](https://iceberg.apache.org/) and [PyIceberg](https://py.iceberg.apache.org/)

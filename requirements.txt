@@ -2,3 +2,7 @@ boto3
 lz4
 protobuf
 bitquery-pb2-kafka-package
+
+# iceberg_query.py only
+pyiceberg[sql-sqlite,pyarrow]>=0.9
+duckdb
