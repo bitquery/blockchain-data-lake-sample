@@ -17,13 +17,18 @@ Raw blocks are not queryable by an Iceberg engine — Iceberg reads columnar fil
 .
 ├── stream.py           # stream a block from the lake; throughput, decode, tx JSON, transfers
 ├── transfers.py        # transfers_from_block(): native, ERC-20, ERC-721 extraction
-├── iceberg_query.py    # register the lake's Parquet dumps as an Iceberg table and run SQL
+├── iceberg_query.py    # single-user: register a Parquet dump as an Iceberg table and run SQL (PyIceberg + DuckDB)
+├── docker-compose.yml  # full lakehouse: lake + Iceberg REST catalog + one-shot registrar
+├── registrar/
+│   └── register.py     #   registers the dumps into the REST catalog so any engine can read them
+├── trino/
+│   └── iceberg.properties  # example Trino catalog config for the REST catalog
 ├── requirements.txt
 ├── Dockerfile          # builds the self-seeding demo lake image
 ├── entrypoint.sh       # boots SeaweedFS and loads the sample blocks and Parquet dumps
 ├── sample/             # sample files baked into the demo image
 │   ├── *.block.lz4     #   Base + Tron blocks
-│   └── parquet/        #   ethereum/dex_trades/ dump
+│   └── parquet/        #   ethereum/dex_trades/ + ethereum/transfers/ dumps
 └── logs/
     ├── base-block-stream.log     # Base block: stream + decode + first 3 tx as JSON
     ├── base-block-transfers.log  # Base block: --transfers run
@@ -349,23 +354,64 @@ For a shared setup, point `--catalog-uri` (or `ICEBERG_CATALOG_URI`) at a REST c
 python3 iceberg_query.py --catalog-uri http://localhost:8181 --register
 ```
 
-Anything speaking the Iceberg REST protocol works: Nessie, Polaris, Lakekeeper, AWS Glue, Unity Catalog. Recent SeaweedFS builds also serve an Iceberg REST catalog on port 8181 alongside the S3 endpoint.
+Anything speaking the Iceberg REST protocol works: Nessie, Polaris, Lakekeeper, AWS Glue, Unity Catalog, or the `tabulario/iceberg-rest` reference server used by the compose stack below. (SeaweedFS itself starts a REST catalog on port 8181, but its write path is not yet compatible with the standard PyIceberg REST client, so the demo uses a dedicated catalog container instead.)
 
-### Reading the same table from other engines
+## Serve real Iceberg to any engine (Trino, Spark, …)
 
-Once registered, the table is ordinary Iceberg. Nothing about it is Bitquery-specific:
+The `iceberg_query.py` flow above is single-user: it registers into a local SQLite catalog and queries with DuckDB. That is **PyIceberg-only** — Trino and Spark cannot read a SQLite catalog.
+
+To let a **non-PyIceberg** engine consume the tables, they must be registered in a **shared catalog** the engine connects to over the network. That is the standard Iceberg architecture: an engine talks to a *catalog*, never to the files directly. [`docker-compose.yml`](docker-compose.yml) stands the whole thing up:
+
+```
+lake       SeaweedFS S3 endpoint, seeded with the sample data   (:8333)
+catalog    Iceberg REST catalog (tabulario/iceberg-rest)        (:8181)
+registrar  one-shot: registers the Parquet dumps as Iceberg tables, then exits
+```
+
+```bash
+docker compose up -d
+docker compose logs -f registrar     # wait for "[registrar] done"
+```
+
+The `registrar` runs PyIceberg **inside the stack**, so consumers never touch it. Once it finishes, point any engine at:
+
+- REST catalog: `http://localhost:8181`
+- S3 storage: `http://localhost:8333` (key `admin`, secret `secret`, path-style)
+
+Tables: `iceberg.ethereum.dex_trades`, `iceberg.ethereum.transfers`.
+
+### Query it from Trino
+
+Copy [`trino/iceberg.properties`](trino/iceberg.properties) into your Trino as `/etc/trino/catalog/iceberg.properties`, then:
 
 ```sql
--- Trino / Athena
-SELECT Trade_Dex_ProtocolName, count(*)
+SHOW TABLES FROM iceberg.ethereum;
+
+SELECT Trade_Dex_ProtocolName, count(*) AS trades
 FROM iceberg.ethereum.dex_trades
-GROUP BY 1;
+GROUP BY 1 ORDER BY trades DESC;
+
+SELECT count(*) FROM iceberg.ethereum.transfers;
 ```
 
+This exact path is tested: a stock `trinodb/trino` container on the compose network reads both tables through the REST catalog with no PyIceberg involved.
+
+### Query it from Spark
+
 ```python
-# Spark
-spark.table("ethereum.dex_trades").groupBy("Trade_Dex_ProtocolName").count().show()
+spark = (SparkSession.builder
+    .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
+    .config("spark.sql.catalog.demo.type", "rest")
+    .config("spark.sql.catalog.demo.uri", "http://localhost:8181")
+    .config("spark.sql.catalog.demo.warehouse", "s3://archive/iceberg")
+    .config("spark.sql.catalog.demo.s3.endpoint", "http://localhost:8333")
+    .config("spark.sql.catalog.demo.s3.path-style-access", "true")
+    .getOrCreate())
+
+spark.table("demo.ethereum.dex_trades").groupBy("Trade_Dex_ProtocolName").count().show()
 ```
+
+Once registered, the tables are ordinary Iceberg — nothing about them is Bitquery- or PyIceberg-specific.
 
 ### Iceberg options
 
