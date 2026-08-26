@@ -55,6 +55,13 @@ The demo image ships two real blocks from two different chains, so you can see t
 - Columns are the dump schema: `Block_Number`, `Trade_Buy_*`, `Trade_Sell_*`, `Trade_Dex_*`, `Transaction_*`.
 - Same schema as the cloud dumps in [blockchain-cloud-data-dump-sample](https://github.com/bitquery/blockchain-cloud-data-dump-sample), served from `s3://bitquery-blockchain-dataset/ethereum/dex_trades/`.
 
+**Ethereum transfers** (Parquet dump), same blocks **24,053,500 - 24,053,549**:
+
+- One **Parquet** file: `ethereum/transfers/24053500_24053549.parquet`.
+- About **1.3 MB**, **26,563 transfers**, **24 columns** — native, ERC-20, and internal (`call`) transfers flattened into one table.
+- Columns are the dump schema: `Block_Number`, `Transfer_Amount`, `Transfer_AmountInUSD`, `Transfer_Sender`, `Transfer_Receiver`, `Transfer_Currency_*`, `Transfer_Type`.
+- Served from `s3://bitquery-blockchain-dataset/ethereum/transfers/`.
+
 The block schema is published at [bitquery/streaming_protobuf](https://github.com/bitquery/streaming_protobuf), and the Python bindings come from `bitquery-pb2-kafka-package`. It is the same schema Bitquery uses for its Kafka streams, so one decoder works for both.
 
 ### Sample output
@@ -279,7 +286,7 @@ python3 iceberg_query.py --register
 python3 iceberg_query.py --examples
 ```
 
-Run your own SQL. The Iceberg scan is handed to DuckDB as `dex_trades`:
+Run your own SQL. The Iceberg scan is handed to DuckDB as a view **named after the table** — `dex_trades` for the default table, `transfers` for the transfers table, and so on:
 
 ```bash
 python3 iceberg_query.py --sql "
@@ -290,6 +297,23 @@ python3 iceberg_query.py --sql "
   GROUP BY 1
   ORDER BY volume_usd DESC"
 ```
+
+The lake ships a second dump, `ethereum.transfers`. Register it and query it the same way — the view is `transfers`:
+
+```bash
+python3 iceberg_query.py --register --table ethereum.transfers \
+  --key ethereum/transfers/24053500_24053549.parquet --sql "
+  SELECT Transfer_Currency_Symbol AS token,
+         count(*) AS transfers,
+         round(sum(Transfer_AmountInUSD), 0) AS usd
+  FROM transfers
+  WHERE Transfer_Currency_Symbol <> ''
+  GROUP BY 1
+  ORDER BY usd DESC NULLS LAST
+  LIMIT 10"
+```
+
+The built-in `--examples` are written for `dex_trades`; for any other table use `--sql` with its view name.
 
 Push a filter into the Iceberg scan so non-matching files are never fetched from S3:
 

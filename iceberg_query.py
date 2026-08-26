@@ -35,7 +35,7 @@ Usage:
     # run the built-in example queries
     python iceberg_query.py --examples
 
-    # run your own SQL against the Iceberg table (aliased as dex_trades)
+    # run your own SQL against the table (the DuckDB view is named after the table)
     python iceberg_query.py --sql "
         SELECT Trade_Dex_ProtocolName, count(*) AS trades
         FROM dex_trades GROUP BY 1 ORDER BY trades DESC"
@@ -224,8 +224,8 @@ def show_metadata(table):
     )
 
 
-def to_duckdb(table, args):
-    """Load the Iceberg scan into DuckDB as `dex_trades`.
+def to_duckdb(table, args, view):
+    """Load the Iceberg scan into DuckDB under `view` (the table's short name).
 
     PyIceberg plans the scan (which files, which row groups) and hands DuckDB an
     Arrow table. Pushing --where down to the scan means unmatched files are never
@@ -237,7 +237,7 @@ def to_duckdb(table, args):
     arrow = scan.to_arrow()
 
     con = duckdb.connect()
-    con.register("dex_trades", arrow)
+    con.register(view, arrow)
     return con, arrow
 
 
@@ -272,7 +272,8 @@ def main():
     p.add_argument("--metadata", action="store_true",
                    help="Print snapshots and per-file statistics.")
     p.add_argument("--examples", action="store_true", help="Run the built-in example queries.")
-    p.add_argument("--sql", help="Run one SQL statement against the table (aliased dex_trades).")
+    p.add_argument("--sql", help="Run one SQL statement; the DuckDB view is named after the "
+                   "table, e.g. dex_trades or transfers.")
     p.add_argument("--where", metavar="EXPR",
                    help="Iceberg row filter pushed into the scan, e.g. "
                         "\"Trade_Buy_Currency_Symbol == 'WETH'\".")
@@ -303,15 +304,21 @@ def main():
         show_metadata(table)
 
     if args.examples or args.sql:
-        con, arrow = to_duckdb(table, args)
-        print(f"\n  scanned {arrow.num_rows:,} rows into DuckDB"
+        view = args.table.split(".")[-1]
+        con, arrow = to_duckdb(table, args, view)
+        print(f"\n  scanned {arrow.num_rows:,} rows into DuckDB as `{view}`"
               + (f" (row filter: {args.where})" if args.where else ""))
 
         if args.sql:
             run_sql(con, args.sql)
         if args.examples:
-            for title, sql in EXAMPLES:
-                run_sql(con, sql, title)
+            if view == "dex_trades":
+                for title, sql in EXAMPLES:
+                    run_sql(con, sql, title)
+            else:
+                print(f"\n  --examples are written for the dex_trades table; this is "
+                      f"`{view}`.\n  Query it with --sql, e.g.:\n"
+                      f"    --sql \"SELECT * FROM {view} LIMIT 5\"")
 
 
 if __name__ == "__main__":
