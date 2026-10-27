@@ -17,6 +17,8 @@ Raw blocks are not queryable by an Iceberg engine — Iceberg reads columnar fil
 .
 ├── stream.py           # stream a block from the lake; throughput, decode, tx JSON, transfers
 ├── transfers.py        # transfers_from_block(): native, ERC-20, ERC-721 extraction
+├── solana_transfers.py # transfers_from_block(): native SOL and SPL token extraction
+├── solana_extract.py   # run the Solana parser on a local .block.lz4 file
 ├── iceberg_query.py    # single-user: register a Parquet dump as an Iceberg table and run SQL (PyIceberg + DuckDB)
 ├── docker-compose.yml  # full lakehouse: lake + Iceberg REST catalog + one-shot registrar
 ├── registrar/
@@ -28,10 +30,12 @@ Raw blocks are not queryable by an Iceberg engine — Iceberg reads columnar fil
 ├── entrypoint.sh       # boots SeaweedFS and loads the sample blocks and Parquet dumps
 ├── sample/             # sample files baked into the demo image
 │   ├── *.block.lz4     #   Base + Tron blocks
+│   ├── solana/         #   two Solana blocks for the parsing example (not seeded into the lake)
 │   └── parquet/        #   ethereum/dex_trades/ + ethereum/transfers/ dumps
 └── logs/
     ├── base-block-stream.log     # Base block: stream + decode + first 3 tx as JSON
     ├── base-block-transfers.log  # Base block: --transfers run
+    ├── solana-block-transfers.log # Solana block: solana_extract.py run
     └── tron-block-stream.log     # Tron block: stream + decode + first 3 tx as JSON
 ```
 
@@ -244,7 +248,28 @@ python3 stream.py --bucket archive --key "$KEY" --transfers 5 --token 0x42000000
   [erc20] 0x4200000000000000000000000000000000000006  0x498581ff... -> 0xbf4195ab...  amount 3390958905493657
 ```
 
-The parser is `transfers_from_block()` in `transfers.py`. See [Extract transfers from a block](https://docs.bitquery.io/docs/data-lake/extract-transfers/) for the full walkthrough.
+The parser is `transfers_from_block()` in `transfers.py`. See [Extract transfers from an EVM block](https://docs.bitquery.io/docs/data-lake/extract-transfers-evm/) for the full walkthrough.
+
+### Solana transfers
+
+Reading a Solana block from the lake works the same way as any other chain. Only the parsing differs, so the Solana example starts from a local block file. `sample/solana/` holds two Solana blocks, slots **457,030,560** and **457,030,039**. They are not seeded into the demo lake.
+
+Extract native SOL and SPL token transfers (Token Program and Token-2022):
+
+```bash
+python3 solana_extract.py sample/solana/000457030560_9WrSdMdyUBjf6NewzfntaKBDwZRmg7EuEW6WPPXwnx5P_a2b85c6b1d89109007848d182427b83a9b9da3c608f87fa1c230c9c1aace00e6.block.lz4
+
+# only one mint, e.g. USDC
+python3 solana_extract.py sample/solana/000457030560_9WrSdMdyUBjf6NewzfntaKBDwZRmg7EuEW6WPPXwnx5P_a2b85c6b1d89109007848d182427b83a9b9da3c608f87fa1c230c9c1aace00e6.block.lz4 EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+```
+
+```
+slot 457030560: 1395 transfers  {'sol': 194, 'spl': 1201}
+
+[sol] SOL  AxiomRXZAq1Jgjj9pHmNqVP7Lhu67wLXZJZbaK87TTSk -> 31LuZVPmU3G8RUUJgdTjwtEwP5KqF82sRgxtyEBQWk3M  amount 67357050 (0.0673571)
+```
+
+The parser is `transfers_from_block()` in `solana_transfers.py`. See [Extract transfers from a Solana block](https://docs.bitquery.io/docs/data-lake/extract-transfers-solana/) for the full walkthrough. Full output is in `logs/solana-block-transfers.log`.
 
 ## Query the Parquet dumps with an Iceberg engine
 

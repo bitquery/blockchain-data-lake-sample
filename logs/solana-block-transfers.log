@@ -1,0 +1,13 @@
+$ python solana_extract.py sample/solana/000457030560_9WrSdMdyUBjf6NewzfntaKBDwZRmg7EuEW6WPPXwnx5P_a2b85c6b1d89109007848d182427b83a9b9da3c608f87fa1c230c9c1aace00e6.block.lz4
+slot 457030560: 1395 transfers  {'sol': 194, 'spl': 1201}
+
+[sol] SOL  AxiomRXZAq1Jgjj9pHmNqVP7Lhu67wLXZJZbaK87TTSk -> 31LuZVPmU3G8RUUJgdTjwtEwP5KqF82sRgxtyEBQWk3M  amount 67357050 (0.0673571)
+[sol] SOL  stnkwFt5Ao6Kq9QqfuLchMHJDxBSD6sqeJfiqM3aAKr -> 4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or  amount 1000000 (0.001)
+[sol] SOL  H4vdB2pcMhzyVgEqMXwboRTebTtQGSN8nK4CANBq1Zck -> 3fVJdx56wq5CNRPRttFUGpZi3FNfPzhjStLeopzXYQRU  amount 650240 (0.00065024)
+
+$ python solana_extract.py sample/solana/000457030560_9WrSdMdyUBjf6NewzfntaKBDwZRmg7EuEW6WPPXwnx5P_a2b85c6b1d89109007848d182427b83a9b9da3c608f87fa1c230c9c1aace00e6.block.lz4 EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+slot 457030560: 1395 transfers  {'sol': 194, 'spl': 1201}
+
+[spl] EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  9JBv6vySuNHniJfRpDMd3xnnAqRb973ks4U7T9ac3Be -> 8ekCy2jHHUbW2yeNGFWYJT9Hm9FW7SvZcZK66dSZCDiF  amount 2538506 (2.53851)
+[spl] EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  9JBv6vySuNHniJfRpDMd3xnnAqRb973ks4U7T9ac3Be -> R4rNJHaffSUotNmqSKNEfDcJE8A7zJUkaoM5Jkd7cYX  amount 100000 (0.1)
+[spl] EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v  9JBv6vySuNHniJfRpDMd3xnnAqRb973ks4U7T9ac3Be -> AhGsEjoU6mNqNB64XsdARDvCmwmt3scsHU7b5WL7CeKQ  amount 0 (0)
